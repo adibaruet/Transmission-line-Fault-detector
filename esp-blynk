@@ -1,34 +1,35 @@
- #define BLYNK_TEMPLATE_ID "TMPL6cjKxcj9c"
+#define BLYNK_TEMPLATE_ID "TMPL6cjKxcj9c"
 #define BLYNK_TEMPLATE_NAME "IOT Cable Intregrity"
 #define BLYNK_AUTH_TOKEN "t-hcLa6e32DPYQLtHGWzFRCgT_Y5lxzJ"
 
 #define BLYNK_PRINT Serial
-#define voltage_1 34
-
-float adc_voltage = 0.0;
-float in_voltage = 0.0;
- 
-// Floats for resistor values in divider (in ohms)
-float R1 = 30000.0;
-float R2 = 7500.0; 
- 
-// Float for Reference Voltage
-float ref_voltage = 5.0;
- 
-// Integer for ADC value
-int adc_value = 0;
 
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <BlynkSimpleEsp32.h>
 
+#include <SoftwareSerial.h>
+
+const int gsm_3tx_pin = 5, gsm_3rx_pin = 6;
+
+// Floats for resistor values in divider (in ohms)
+const float R1 = 30000.0;
+const float R2 = 7500.0; 
+  
+// Float for Reference Voltage
+const float ref_voltage = 3.3;
+
+const int flameSensor = 3;
+const int buzzer = 8;
 
 
 char auth[] = BLYNK_AUTH_TOKEN;
 
-// Your WiFi credentials.
-char ssid[] = "Helium";
-char pass[] = "helium2024";
+// WiFi credentials.
+char ssid[] = "YourHotspotName";
+char pass[] = "HotspotPassword";
+
+SoftwareSerial gsm_ss(gsm_3tx_pin, gsm_3rx_pin);
 
 
 BlynkTimer timer;
@@ -37,22 +38,124 @@ void setup()
 {
   // Debug console
   Serial.begin(9600);
+  gsm_ss.begin(9600);
   Blynk.begin(auth, ssid, pass);
-  pinMode(voltage_1,INPUT);
 
+  pinMode(33, INPUT);
+  pinMode(34, INPUT);
+  pinMode(35, INPUT);
+  pinMode(flameSensor, INPUT);
+  delay(100);
 }
 
 void loop()
 {
   Blynk.run();
- adc_value = analogRead(voltage_1);
- 
- // Determine voltage at ADC input
- adc_voltage  = (adc_value * ref_voltage) / 1024.0; 
- 
- // Calculate voltage at divider input
- in_voltage = adc_voltage / (R2/(R1+R2)) ; 
-  Serial.println(in_voltage);
-  Blynk.virtualWrite(V0,in_voltage);
+  float voltage_1 = voltageReading(34);
+  float voltage_2 = voltageReading(35);
+
+  float current_1 = currentReading(33);
+
+  Blynk.virtualWrite(V0,voltage_1);
+  Blynk.virtualWrite(V1,voltage_2);
+  Blynk.virtualWrite(V2,current_1);
+
+  if (gsm_ss.available() > 0){
+    Serial.write(gsm_ss.read());
+  }
+
+  int fireData = digitalRead(flameSensor);
+  if(fireData == 0){
+    BuzzAlarm();
+    SendFireAlarm();
+    MakeCall();
+  }
+
+  delay(3000);
+}
+
+
+// Voltage Reading Function
+float voltageReading(int ANALOG_IN_PIN){
+  float adc_voltage = 0.0;  
+  int adc_value = 0;
+
+  adc_value = analogRead(ANALOG_IN_PIN);
+  
+  adc_voltage  = (adc_value * ref_voltage) / 4096.0; 
+  float in_voltage = adc_voltage / (R2/(R1+R2)); 
+  if(in_voltage <= 0.1){
+    BuzzAlarm();
+    SendMessage(ANALOG_IN_PIN);
+    MakeCall();
+  }
+  return in_voltage;
+  // Serial.println(in_voltage, 2);
+}
+
+
+// Current Reading Function
+float currentReading(int ANALOG_IN_PIN){
+  float AcsValue = 0.0;
+  float Samples = 0.0;
+  float AvgAcs = 0.0;
+  
+  for(int i = 0; i < 150; i++){
+    AcsValue = analogRead(ANALOG_IN_PIN);
+    Samples = Samples + AcsValue;
+    delay(3);
+  }
+
+  AvgAcs = Samples / 150.0;
+
+  float AcsF = (2.5 - (AvgAcs * (ref_voltage / 4096.0))) / 0.185;
+  if(AcsF <= 0.1){
+    BuzzAlarm();
+    SendMessage(ANALOG_IN_PIN);
+    MakeCall();
+  }
+  return AcsF;
+  // Serial.println(AcsF, 2);
+}
+
+
+void SendMessage(int ANALOG_IN_PIN)
+{
+  gsm_ss.println("AT+CMGF=1");    //Sets the GSM Module in Text Mode
+  delay(1000);  // Delay of 1000 milli seconds or 1 second
+  gsm_ss.println("AT+CMGS=\"+8801725090534\"");
   delay(1000);
+  gsm_ss.println("Line Fault Detected at %d",ANALOG_IN_PIN);// The SMS text you want to send
+  delay(100);
+   gsm_ss.println((char)26);// ASCII code of CTRL+Z
+  delay(1000);
+}
+
+void MakeCall()
+{
+  gsm_ss.println("ATD+8801725090534;"); // ATDxxxxxxxxxx;
+  Serial.println("Calling  "); // print response over serial port
+  delay(1000);
+}
+
+// Function For Fire Alarm
+void SendFireAlarm()
+{
+  gsm_ss.println("AT+CMGF=1");    //Sets the GSM Module in Text Mode
+  delay(1000);  // Delay of 1000 milli seconds or 1 second
+  gsm_ss.println("AT+CMGS=\"+8801725090534\"");
+  delay(1000);
+  gsm_ss.println("Fire Detected! Hurry Up!");// The SMS text you want to send
+  delay(100);
+   gsm_ss.println((char)26);// ASCII code of CTRL+Z
+  delay(1000);
+}
+
+void BuzzAlarm(){
+  for(int i = 0; i < 5; i++){
+    tone(buzzer, 1000); // Send 1KHz sound signal...
+    delay(800);        // ...for 1 sec
+    noTone(buzzer);     // Stop sound...
+    delay(800);        // ...for 1sec
+  }
 }
